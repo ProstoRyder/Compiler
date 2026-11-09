@@ -1,0 +1,5 @@
+program example
+var a: integer
+begin
+a := 12.5
+end.

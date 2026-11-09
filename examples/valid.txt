@@ -1,0 +1,15 @@
+program example
+var a, b, i, n, sum, result: integer
+begin
+read(a, b, n)
+sum := 0
+for i = 1 to n do
+sum := sum + i
+end
+if a > b then result := a else result := b
+write(result)
+(result = a != b and n > 0 ? (a + b) * 2 : sum)
+write(sum, result)
+result := (sum + 2) * 3 - 8 / 2 + 2 ↑ 3
+write(result)
+end.
