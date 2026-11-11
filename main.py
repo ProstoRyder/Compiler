@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 from lexer import Lexer, LexicalError
+from parser import Parser, SyntaxAnalysisError
 
 
 def run_cli():
@@ -17,6 +18,13 @@ def run_cli():
               f"{token.index if token.index is not None else '-'}")
     print("IDN:", result.idn)
     print("CON:", result.con)
+    try:
+        parser = Parser(result.tokens)
+        parser.parse()
+    except SyntaxAnalysisError as exc:
+        print(f"Синтаксична помилка: {exc}")
+        return 2
+    print(f"Синтаксис правильний. Кроків розбору: {len(parser.steps)}")
     return 0
 
 

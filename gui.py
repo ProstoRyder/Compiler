@@ -6,6 +6,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from exporter import FILES, export_csv
 from lexer import Lexer, LexerResult, LexicalError, TraceStep
+from parser import Parser, SyntaxAnalysisError, ParseStep
 
 
 HERE = Path(__file__).resolve().parent
@@ -14,7 +15,7 @@ HERE = Path(__file__).resolve().parent
 class LexerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Лексичний аналізатор — лабораторна №2 | Варіант 4")
+        self.title("Лексичний і синтаксичний аналізатор — лабораторна №3 | Варіант 4")
         self.geometry("1380x790")
         self.minsize(1050, 640)
         self.configure(bg="#f1f5f9")
@@ -22,6 +23,9 @@ class LexerGUI(tk.Tk):
         self.result: LexerResult | None = None
         self.error: LexicalError | None = None
         self.trace_steps: list[TraceStep] = []
+        self.syntax_steps: list[ParseStep] = []
+        self.syntax_error: SyntaxAnalysisError | None = None
+        self.syntax_step_index = -1
         self.step_index = -1
         self._updating_trace_selection = False
 
@@ -52,10 +56,10 @@ class LexerGUI(tk.Tk):
         outer = ttk.Frame(self, style="Root.TFrame", padding=14)
         outer.pack(fill="both", expand=True)
 
-        ttk.Label(outer, text="Лексичний аналізатор", style="Heading.TLabel").pack(anchor="w")
+        ttk.Label(outer, text="Лексичний і синтаксичний аналізатор", style="Heading.TLabel").pack(anchor="w")
         ttk.Label(
             outer,
-            text="Діаграма станів S0–S10  •  Варіант №4  •  Таблиці лексем, IDN і CON",
+            text="ЛР №3  •  Варіант №4  •  Лексер → рекурсивний спуск  •  Покроковий журнал",
             style="Hint.TLabel",
         ).pack(anchor="w", pady=(0, 12))
 
@@ -64,7 +68,7 @@ class LexerGUI(tk.Tk):
         for text, command in (
             ("Відкрити файл", self.open_file),
             ("Тестова програма", self.load_example),
-            ("Аналізувати", self.analyze),
+            ("Лексика + синтаксис", self.analyze),
             ("Експорт CSV", self.export_results),
         ):
             button = ttk.Button(toolbar, text=text, command=command, style="Main.TButton")
@@ -76,7 +80,7 @@ class LexerGUI(tk.Tk):
         main.pack(fill="both", expand=True)
 
         left = ttk.LabelFrame(main, text="  Вихідний текст програми  ", padding=8)
-        right = ttk.LabelFrame(main, text="  Результати лексичного аналізу  ", padding=8)
+        right = ttk.LabelFrame(main, text="  Результати аналізу  ", padding=8)
         main.add(left, weight=45)
         main.add(right, weight=55)
 
@@ -104,6 +108,7 @@ class LexerGUI(tk.Tk):
         self.editor.configure(yscrollcommand=v_scroll.set, xscrollcommand=h_scroll.set)
         self.editor.tag_configure("active_symbol", background="#bfdbfe", foreground="#1d4ed8")
         self.editor.tag_configure("lexical_error", background="#fecaca", foreground="#991b1b", underline=True)
+        self.editor.tag_configure("syntax_active", background="#dbeafe", foreground="#1d4ed8")
         self.editor.bind("<<Modified>>", self._on_editor_modified)
         self.editor.edit_modified(False)
 
@@ -124,6 +129,19 @@ class LexerGUI(tk.Tk):
             (65, 75, 80, 80, 330),
         )
         self.trace_table.bind("<<TreeviewSelect>>", self._on_trace_select)
+        self.syntax_table = self._make_tab(
+            "Синтаксис", ("num", "line", "token", "rule", "action", "stack"),
+            ("Крок", "Рядок", "Лексема", "Правило", "Дія", "Стек викликів"),
+            (60, 65, 90, 145, 270, 330),
+        )
+        self.syntax_table.bind("<<TreeviewSelect>>", self._on_syntax_select)
+        syntax_controls = ttk.Frame(right)
+        syntax_controls.pack(fill="x", pady=(6, 0))
+        for label, func in (("|< Синтаксис", self.first_syntax_step),
+                            ("< Назад", self.previous_syntax_step),
+                            ("Далі >", self.next_syntax_step),
+                            ("Синтаксис >|", self.last_syntax_step)):
+            ttk.Button(syntax_controls, text=label, command=func).pack(side="left", padx=(0, 5))
 
         controls = ttk.Frame(outer, style="Root.TFrame")
         controls.pack(fill="x", pady=(10, 5))
@@ -168,7 +186,7 @@ class LexerGUI(tk.Tk):
         if not self.editor.edit_modified():
             return
         self.editor.edit_modified(False)
-        if self.result is not None or self.trace_steps:
+        if self.result is not None or self.trace_steps or self.syntax_steps:
             self._clear_previous_result()
             self.status_label.configure(text="Вихідний код змінено. Натисніть «Аналізувати» повторно.")
 
@@ -208,10 +226,14 @@ class LexerGUI(tk.Tk):
         self.result = None
         self.error = None
         self.trace_steps = []
+        self.syntax_steps = []
+        self.syntax_error = None
+        self.syntax_step_index = -1
         self.step_index = -1
         self.editor.tag_remove("lexical_error", "1.0", "end")
         self.editor.tag_remove("active_symbol", "1.0", "end")
-        for table in (self.token_table, self.idn_table, self.con_table, self.trace_table):
+        self.editor.tag_remove("syntax_active", "1.0", "end")
+        for table in (self.token_table, self.idn_table, self.con_table, self.trace_table, self.syntax_table):
             table.delete(*table.get_children())
         self.export_button.configure(state="disabled")
         self.step_label.configure(text="Немає результату")
@@ -239,10 +261,67 @@ class LexerGUI(tk.Tk):
         self.export_button.configure(state="normal")
         self.step_label.configure(text=f"{len(self.trace_steps)} переходів; кнопка «Далі >» — покроковий режим")
         self.tabs.select(0)
-        self.status_label.configure(
-            text=f"Аналіз успішний: {len(self.result.tokens)} лексем; "
-                 f"IDN: {len(self.result.idn)}, CON: {len(self.result.con)}."
-        )
+        parser = Parser(self.result.tokens)
+        try:
+            parser.parse()
+        except SyntaxAnalysisError as exc:
+            self.syntax_error = exc
+        self.syntax_steps = parser.steps
+        self._fill_syntax_trace()
+        self.tabs.select(self.syntax_table.master)
+        if self.syntax_error is not None:
+            self._highlight_syntax_line(self.syntax_error.line)
+            self.status_label.configure(text=f"СИНТАКСИЧНА ПОМИЛКА: {self.syntax_error}")
+        else:
+            self.status_label.configure(
+                text=f"Лексичний і синтаксичний аналіз успішні: {len(self.result.tokens)} лексем; "
+                     f"{len(self.syntax_steps)} кроків синтаксичного розбору."
+            )
+
+    def _fill_syntax_trace(self):
+        self.syntax_table.delete(*self.syntax_table.get_children())
+        for index, step in enumerate(self.syntax_steps):
+            self.syntax_table.insert("", "end", iid=f"syntax-{index}", values=(
+                step.number, step.line, step.token, step.rule, step.action, step.stack,
+            ))
+
+    def _highlight_syntax_line(self, line: int):
+        self.editor.tag_remove("lexical_error", "1.0", "end")
+        self.editor.tag_add("lexical_error", f"{line}.0", f"{line}.end")
+        self.editor.see(f"{line}.0")
+
+    def go_to_syntax_step(self, index: int):
+        if not self.syntax_steps:
+            return
+        index = max(0, min(index, len(self.syntax_steps) - 1))
+        self.syntax_step_index = index
+        step = self.syntax_steps[index]
+        self.editor.tag_remove("syntax_active", "1.0", "end")
+        self.editor.tag_add("syntax_active", f"{step.line}.0", f"{step.line}.end")
+        self.editor.see(f"{step.line}.0")
+        self.syntax_table.selection_set(f"syntax-{index}")
+        self.syntax_table.focus(f"syntax-{index}")
+        self.syntax_table.see(f"syntax-{index}")
+        self.step_label.configure(text=f"Синтаксис: крок {index+1}/{len(self.syntax_steps)} | {step.rule} | {step.action}")
+
+    def _on_syntax_select(self, _event):
+        selection = self.syntax_table.selection()
+        if selection:
+            index = int(selection[0].split("-")[1])
+            if index != self.syntax_step_index:
+                self.go_to_syntax_step(index)
+
+    def first_syntax_step(self):
+        self.go_to_syntax_step(0)
+
+    def previous_syntax_step(self):
+        self.go_to_syntax_step(self.syntax_step_index - 1)
+
+    def next_syntax_step(self):
+        self.go_to_syntax_step(self.syntax_step_index + 1)
+
+    def last_syntax_step(self):
+        self.go_to_syntax_step(len(self.syntax_steps) - 1)
 
     def _fill_tables(self, step: TraceStep | None = None):
         if not self.result:
