@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 from lexer import Lexer, LexicalError
 from parser import Parser, SyntaxAnalysisError
+from poliz import generate_poliz
 
 
 def run_cli():
@@ -25,6 +26,15 @@ def run_cli():
         print(f"Синтаксична помилка: {exc}")
         return 2
     print(f"Синтаксис правильний. Кроків розбору: {len(parser.steps)}")
+    poliz = generate_poliz(result.tokens, validate=False)
+    print(f"\nПОЛІЗ ({len(poliz.code)} елементів):")
+    print(poliz.text)
+    print(f"Кроків побудови ПОЛІЗ: {len(poliz.steps)}")
+    if "--poliz-trace" in sys.argv:
+        print("\nКрок | Рядок | Лексема | Стек операторів | Вихідний ПОЛІЗ")
+        for step in poliz.steps:
+            print(f"{step.number:4} | {step.line:5} | {step.lexeme:14} | "
+                  f"{' '.join(step.operator_stack):25} | {' '.join(step.output)}")
     return 0
 
 

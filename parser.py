@@ -1,7 +1,3 @@
-"""ЛР №3. Синтаксичний аналізатор методом рекурсивного спуску.
-
-Працює з Token, сформованими лексером лабораторної №2. Не виконує код.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -104,7 +100,6 @@ class Parser:
             self.expect(NEWLINE, "новий рядок після 'begin'")
             self.parse_statement_list(5)
             self.expect(5, "'end.' для завершення програми")
-            # Допускається один завершальний перенос рядка файла.
             self.accept(NEWLINE)
             if self.current:
                 self.error('зайві лексеми після завершення програми')
@@ -208,8 +203,6 @@ class Parser:
             if self.accept(15):
                 self.parse_logical_factor()
                 return
-            # Спробувати (логічний вираз), але (a + b) > c є відношенням.
-            # Контрольна точка дає змогу розрізнити їх без зміни лексера.
             if self.match(27):
                 checkpoint = self.position
                 steps_checkpoint = len(self.steps)
@@ -241,7 +234,7 @@ class Parser:
         with self._rule('степінь'):
             self.parse_factor()
             if self.accept(26):
-                self.parse_power()  # права асоціативність
+                self.parse_power()
 
     def parse_factor(self) -> None:
         with self._rule('множник'):

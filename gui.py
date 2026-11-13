@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox, ttk
 from exporter import FILES, export_csv
 from lexer import Lexer, LexerResult, LexicalError, TraceStep
 from parser import Parser, SyntaxAnalysisError, ParseStep
+from poliz import PolizResult, PolizStep, generate_poliz
 
 
 HERE = Path(__file__).resolve().parent
@@ -15,7 +16,7 @@ HERE = Path(__file__).resolve().parent
 class LexerGUI(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Лексичний і синтаксичний аналізатор — лабораторна №3 | Варіант 4")
+        self.title("Компілятор — лабораторна №4. Побудова ПОЛІЗ | Варіант 4")
         self.geometry("1380x790")
         self.minsize(1050, 640)
         self.configure(bg="#f1f5f9")
@@ -24,6 +25,9 @@ class LexerGUI(tk.Tk):
         self.error: LexicalError | None = None
         self.trace_steps: list[TraceStep] = []
         self.syntax_steps: list[ParseStep] = []
+        self.poliz_result: PolizResult | None = None
+        self.poliz_steps: list[PolizStep] = []
+        self.poliz_step_index = -1
         self.syntax_error: SyntaxAnalysisError | None = None
         self.syntax_step_index = -1
         self.step_index = -1
@@ -56,10 +60,10 @@ class LexerGUI(tk.Tk):
         outer = ttk.Frame(self, style="Root.TFrame", padding=14)
         outer.pack(fill="both", expand=True)
 
-        ttk.Label(outer, text="Лексичний і синтаксичний аналізатор", style="Heading.TLabel").pack(anchor="w")
+        ttk.Label(outer, text="Лексичний, синтаксичний аналіз і ПОЛІЗ", style="Heading.TLabel").pack(anchor="w")
         ttk.Label(
             outer,
-            text="ЛР №3  •  Варіант №4  •  Лексер → рекурсивний спуск  •  Покроковий журнал",
+            text="ЛР №4  •  Варіант №4  •  Лексер → парсер → алгоритм Дейкстри → ПОЛІЗ",
             style="Hint.TLabel",
         ).pack(anchor="w", pady=(0, 12))
 
@@ -68,13 +72,16 @@ class LexerGUI(tk.Tk):
         for text, command in (
             ("Відкрити файл", self.open_file),
             ("Тестова програма", self.load_example),
-            ("Лексика + синтаксис", self.analyze),
+            ("Побудувати ПОЛІЗ", self.analyze),
             ("Експорт CSV", self.export_results),
+            ("Зберегти ПОЛІЗ", self.save_poliz),
         ):
             button = ttk.Button(toolbar, text=text, command=command, style="Main.TButton")
             button.pack(side="left", padx=(0, 8))
             if text == "Експорт CSV":
                 self.export_button = button
+            if text == "Зберегти ПОЛІЗ":
+                self.save_poliz_button = button
 
         main = ttk.Panedwindow(outer, orient="horizontal")
         main.pack(fill="both", expand=True)
@@ -109,6 +116,7 @@ class LexerGUI(tk.Tk):
         self.editor.tag_configure("active_symbol", background="#bfdbfe", foreground="#1d4ed8")
         self.editor.tag_configure("lexical_error", background="#fecaca", foreground="#991b1b", underline=True)
         self.editor.tag_configure("syntax_active", background="#dbeafe", foreground="#1d4ed8")
+        self.editor.tag_configure("poliz_active", background="#dcfce7", foreground="#166534")
         self.editor.bind("<<Modified>>", self._on_editor_modified)
         self.editor.edit_modified(False)
 
@@ -135,6 +143,7 @@ class LexerGUI(tk.Tk):
             (60, 65, 90, 145, 270, 330),
         )
         self.syntax_table.bind("<<TreeviewSelect>>", self._on_syntax_select)
+        self._build_poliz_tab()
         syntax_controls = ttk.Frame(right)
         syntax_controls.pack(fill="x", pady=(6, 0))
         for label, func in (("|< Синтаксис", self.first_syntax_step),
@@ -161,6 +170,46 @@ class LexerGUI(tk.Tk):
                                       style="Status.TLabel", anchor="w")
         self.status_label.pack(fill="x")
         self.export_button.configure(state="disabled")
+        self.save_poliz_button.configure(state="disabled")
+
+    def _build_poliz_tab(self):
+        self.poliz_page = ttk.Frame(self.tabs, padding=5)
+        self.tabs.add(self.poliz_page, text="ПОЛІЗ")
+        ttk.Label(self.poliz_page, text="ПОЛІЗ (повний запис або стан на обраному кроці):").pack(anchor="w")
+        self.poliz_output = tk.Text(self.poliz_page, height=6, font=("Consolas", 10),
+                                    wrap="word", background="#f8fafc", state="disabled", padx=8, pady=6)
+        self.poliz_output.pack(fill="x", pady=(3, 8))
+        table_container = ttk.Frame(self.poliz_page)
+        table_container.pack(fill="both", expand=True)
+        self.poliz_table = ttk.Treeview(table_container,
+            columns=("num", "line", "token", "stack", "output", "action"),
+            show="headings", selectmode="browse")
+        for key, label, width in (
+            ("num", "№", 40), ("line", "Рядок", 54), ("token", "Вхідна лексема", 112),
+            ("stack", "Стек операторів", 145), ("output", "Вихідний ПОЛІЗ", 260),
+            ("action", "Дія", 165),
+        ):
+            self.poliz_table.heading(key, text=label)
+            self.poliz_table.column(key, width=width, minwidth=45, anchor="w")
+        self.poliz_table.grid(row=0, column=0, sticky="nsew")
+        yscroll = ttk.Scrollbar(table_container, orient="vertical", command=self.poliz_table.yview)
+        xscroll = ttk.Scrollbar(table_container, orient="horizontal", command=self.poliz_table.xview)
+        yscroll.grid(row=0, column=1, sticky="ns")
+        xscroll.grid(row=1, column=0, sticky="ew")
+        self.poliz_table.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+        table_container.columnconfigure(0, weight=1)
+        table_container.rowconfigure(0, weight=1)
+        self.poliz_table.bind("<<TreeviewSelect>>", self._on_poliz_select)
+        nav = ttk.Frame(self.poliz_page)
+        nav.pack(fill="x", pady=(8, 0))
+        for label, action in (("|<", self.first_poliz_step),
+                              ("< Назад", self.previous_poliz_step),
+                              ("Далі >", self.next_poliz_step),
+                              (">|", self.last_poliz_step),
+                              ("Весь ПОЛІЗ", self.show_full_poliz)):
+            ttk.Button(nav, text=label, command=action).pack(side="left", padx=(0, 5))
+        self.poliz_step_label = ttk.Label(nav, text="Немає кроків", style="Hint.TLabel")
+        self.poliz_step_label.pack(side="left", padx=(8, 0))
 
     def _make_tab(self, title, columns, headers, widths) -> ttk.Treeview:
         page = ttk.Frame(self.tabs, padding=3)
@@ -186,7 +235,7 @@ class LexerGUI(tk.Tk):
         if not self.editor.edit_modified():
             return
         self.editor.edit_modified(False)
-        if self.result is not None or self.trace_steps or self.syntax_steps:
+        if self.result is not None or self.trace_steps or self.syntax_steps or self.poliz_steps:
             self._clear_previous_result()
             self.status_label.configure(text="Вихідний код змінено. Натисніть «Аналізувати» повторно.")
 
@@ -228,14 +277,21 @@ class LexerGUI(tk.Tk):
         self.trace_steps = []
         self.syntax_steps = []
         self.syntax_error = None
+        self.poliz_result = None
+        self.poliz_steps = []
+        self.poliz_step_index = -1
         self.syntax_step_index = -1
         self.step_index = -1
         self.editor.tag_remove("lexical_error", "1.0", "end")
         self.editor.tag_remove("active_symbol", "1.0", "end")
         self.editor.tag_remove("syntax_active", "1.0", "end")
-        for table in (self.token_table, self.idn_table, self.con_table, self.trace_table, self.syntax_table):
+        self.editor.tag_remove("poliz_active", "1.0", "end")
+        for table in (self.token_table, self.idn_table, self.con_table, self.trace_table, self.syntax_table, self.poliz_table):
             table.delete(*table.get_children())
         self.export_button.configure(state="disabled")
+        self.save_poliz_button.configure(state="disabled")
+        self._set_poliz_output("")
+        self.poliz_step_label.configure(text="Немає кроків")
         self.step_label.configure(text="Немає результату")
 
     def analyze(self):
@@ -273,10 +329,102 @@ class LexerGUI(tk.Tk):
             self._highlight_syntax_line(self.syntax_error.line)
             self.status_label.configure(text=f"СИНТАКСИЧНА ПОМИЛКА: {self.syntax_error}")
         else:
+            # Генератор викликається лише після успішного Parser.parse().
+            try:
+                self.poliz_result = generate_poliz(self.result.tokens, validate=False)
+            except Exception as exc:
+                self.status_label.configure(text=f"ПОМИЛКА ГЕНЕРАЦІЇ ПОЛІЗ: {exc}")
+                return
+            self.poliz_steps = list(self.poliz_result.steps)
+            self._fill_poliz_trace()
+            self._set_poliz_output(self.poliz_result.text)
+            self.save_poliz_button.configure(state="normal")
+            self.tabs.select(self.poliz_page)
+            self.poliz_step_label.configure(text=f"{len(self.poliz_steps)} кроків")
             self.status_label.configure(
-                text=f"Лексичний і синтаксичний аналіз успішні: {len(self.result.tokens)} лексем; "
-                     f"{len(self.syntax_steps)} кроків синтаксичного розбору."
+                text=f"Успішно: {len(self.result.tokens)} лексем; "
+                     f"{len(self.syntax_steps)} кроків парсера; "
+                     f"{len(self.poliz_steps)} кроків ПОЛІЗ; "
+                     f"{len(self.poliz_result.code)} елементів вихідного запису."
             )
+
+    def _set_poliz_output(self, content: str):
+        self.poliz_output.configure(state="normal")
+        self.poliz_output.delete("1.0", "end")
+        self.poliz_output.insert("1.0", content)
+        self.poliz_output.configure(state="disabled")
+
+    def _fill_poliz_trace(self):
+        self.poliz_table.delete(*self.poliz_table.get_children())
+        for i, step in enumerate(self.poliz_steps):
+            self.poliz_table.insert("", "end", iid=f"poliz-{i}", values=(
+                step.number, step.line, step.lexeme,
+                " ".join(step.operator_stack) or "—",
+                " ".join(step.output), step.action,
+            ))
+
+    def go_to_poliz_step(self, index: int):
+        if not self.poliz_steps:
+            return
+        index = max(0, min(index, len(self.poliz_steps) - 1))
+        self.poliz_step_index = index
+        step = self.poliz_steps[index]
+        self._set_poliz_output(" ".join(step.output))
+        self.editor.tag_remove("poliz_active", "1.0", "end")
+        if step.token_index is not None:
+            self.editor.tag_add("poliz_active", f"{step.line}.0", f"{step.line}.end")
+            self.editor.see(f"{step.line}.0")
+        iid = f"poliz-{index}"
+        if self.poliz_table.selection() != (iid,):
+            self.poliz_table.selection_set(iid)
+        self.poliz_table.focus(iid)
+        self.poliz_table.see(iid)
+        self.poliz_step_label.configure(text=f"Крок {index + 1}/{len(self.poliz_steps)}")
+
+    def _on_poliz_select(self, _event):
+        selected = self.poliz_table.selection()
+        if selected:
+            index = int(selected[0].split("-")[1])
+            if index != self.poliz_step_index:
+                self.go_to_poliz_step(index)
+
+    def first_poliz_step(self):
+        self.go_to_poliz_step(0)
+
+    def previous_poliz_step(self):
+        self.go_to_poliz_step(self.poliz_step_index - 1)
+
+    def next_poliz_step(self):
+        self.go_to_poliz_step(self.poliz_step_index + 1)
+
+    def last_poliz_step(self):
+        self.go_to_poliz_step(len(self.poliz_steps) - 1)
+
+    def show_full_poliz(self):
+        if self.poliz_result is None:
+            return
+        self.poliz_step_index = -1
+        self._set_poliz_output(self.poliz_result.text)
+        self.editor.tag_remove("poliz_active", "1.0", "end")
+        for iid in self.poliz_table.selection():
+            self.poliz_table.selection_remove(iid)
+        self.poliz_step_label.configure(text=f"Весь ПОЛІЗ ({len(self.poliz_result.code)} елементів)")
+
+    def save_poliz(self):
+        if self.poliz_result is None:
+            messagebox.showinfo("Немає результату", "Спочатку побудуйте ПОЛІЗ.")
+            return
+        filename = filedialog.asksaveasfilename(title="Зберегти ПОЛІЗ", defaultextension=".txt",
+            filetypes=[("Текстові файли", "*.txt"), ("Усі файли", "*.*")],
+            initialfile="poliz.txt")
+        if not filename:
+            return
+        try:
+            Path(filename).write_text(self.poliz_result.text + "\n", encoding="utf-8")
+        except OSError as exc:
+            messagebox.showerror("Помилка збереження", str(exc))
+        else:
+            messagebox.showinfo("Готово", f"ПОЛІЗ збережено: {filename}")
 
     def _fill_syntax_trace(self):
         self.syntax_table.delete(*self.syntax_table.get_children())
